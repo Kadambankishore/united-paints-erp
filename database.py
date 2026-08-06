@@ -1,41 +1,37 @@
 # database.py
-# This file connects our app to the PostgreSQL database on Railway
-# Think of it like a telephone cable between our code and the database
-
 import os
-from sqlalchemy import create_engine
+import time
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-# -------------------------------------------------------------------
-# DATABASE_URL is given automatically by Railway when you add Postgres
-# It looks like: postgresql://user:password@host:5432/dbname
-# -------------------------------------------------------------------
+# Railway provides DATABASE_URL automatically when PostgreSQL is added
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
-# Railway sometimes gives "postgres://" but SQLAlchemy needs "postgresql://"
-# This line fixes that automatically
+# Railway uses "postgres://" but SQLAlchemy needs "postgresql://"
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL environment variable is not set! Please add PostgreSQL on Railway.")
+    raise RuntimeError(
+        "DATABASE_URL is not set. "
+        "On Railway: click your app → Variables → Add Reference → Postgres → DATABASE_URL"
+    )
 
-# Create the database engine (the actual connection)
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+# Create engine with connection pool settings suitable for Railway
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,       # Check connection is alive before using
+    pool_recycle=300,         # Recycle connections every 5 minutes
+    connect_args={"connect_timeout": 10}  # 10 second connection timeout
+)
 
-# SessionLocal = a "conversation session" with the database
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Base = parent class for all our database table definitions
 Base = declarative_base()
 
 
 def get_db():
-    """
-    This is used by FastAPI to give each API request its own DB session.
-    It automatically closes the session when the request is done.
-    """
+    """Give API routes a database session. Closes automatically when done."""
     db = SessionLocal()
     try:
         yield db
@@ -43,54 +39,71 @@ def get_db():
         db.close()
 
 
+def wait_for_db(max_retries: int = 10, delay: int = 3):
+    """
+    Wait for the database to be ready.
+    Railway sometimes needs a few seconds before PostgreSQL accepts connections.
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            print(f"✅ Database connection successful!")
+            return True
+        except Exception as e:
+            if attempt < max_retries:
+                print(f"⏳ Database not ready yet (attempt {attempt}/{max_retries}). Waiting {delay}s... Error: {e}")
+                time.sleep(delay)
+            else:
+                print(f"❌ Could not connect to database after {max_retries} attempts: {e}")
+                raise
+    return False
+
+
 def create_tables():
-    """Create all tables in the database (runs on first startup)"""
-    from models import User, Invoice, InvoiceLineItem  # import here to avoid circular imports
+    """Create all database tables if they don't exist."""
+    from models import User, Invoice, InvoiceLineItem
     Base.metadata.create_all(bind=engine)
-    print("✅ All database tables created (or already exist)")
+    print("✅ Database tables ready")
 
 
 def seed_default_users():
-    """
-    Create all default user accounts on first startup.
-    Passwords can be changed later from the admin panel.
-    """
+    """Create default login accounts on first startup."""
     from models import User
     from auth import hash_password
 
     db = SessionLocal()
+    try:
+        default_users = [
+            ("muruga",              "Admin@2026",  "admin",      None,                      "Muruga (Admin)"),
+            ("akshai_sir",          "Mgmt@2026",   "management", None,                      "Akshai Sir"),
+            ("aakhash_sir",         "Mgmt@2026",   "management", None,                      "Aakhash Sir"),
+            ("ashok_sir",           "Mgmt@2026",   "management", None,                      "Ashok Sir"),
+            ("vijay",               "Rep@2026",    "rep",        "Vijay",                   "Vijay"),
+            ("u_kannan",            "Rep@2026",    "rep",        "U. Kannan",               "U. Kannan"),
+            ("l_sreenivasan",       "Rep@2026",    "rep",        "L. Sreenivasan",          "L. Sreenivasan"),
+            ("l_sreenivasan_covai", "Rep@2026",    "rep",        "L. Sreenivasan (Covai)",  "L.S. Covai"),
+            ("babu",                "Rep@2026",    "rep",        "Babu",                    "Babu"),
+            ("t_dhinakaran",        "Rep@2026",    "rep",        "T. Dhinakaran",           "T. Dhinakaran"),
+            ("deepak",              "Rep@2026",    "rep",        "Deepak",                  "Deepak"),
+        ]
 
-    # (username, password, role, rep_name, display_name)
-    # role can be: "admin", "management", "rep"
-    default_users = [
-        ("muruga",              "Admin@2026",   "admin",      None,                      "Muruga (Admin)"),
-        ("akshai_sir",          "Mgmt@2026",    "management", None,                      "Akshai Sir"),
-        ("aakhash_sir",         "Mgmt@2026",    "management", None,                      "Aakhash Sir"),
-        ("ashok_sir",           "Mgmt@2026",    "management", None,                      "Ashok Sir"),
-        ("vijay",               "Rep@2026",     "rep",        "Vijay",                   "Vijay"),
-        ("u_kannan",            "Rep@2026",     "rep",        "U. Kannan",               "U. Kannan"),
-        ("l_sreenivasan",       "Rep@2026",     "rep",        "L. Sreenivasan",          "L. Sreenivasan"),
-        ("l_sreenivasan_covai", "Rep@2026",     "rep",        "L. Sreenivasan (Covai)",  "L.S. Covai"),
-        ("babu",                "Rep@2026",     "rep",        "Babu",                    "Babu"),
-        ("t_dhinakaran",        "Rep@2026",     "rep",        "T. Dhinakaran",           "T. Dhinakaran"),
-        ("deepak",              "Rep@2026",     "rep",        "Deepak",                  "Deepak"),
-    ]
+        created = 0
+        for username, password, role, rep_name, display_name in default_users:
+            exists = db.query(User).filter(User.username == username).first()
+            if not exists:
+                user = User(
+                    username=username,
+                    password_hash=hash_password(password),
+                    role=role,
+                    rep_name=rep_name,
+                    display_name=display_name,
+                    is_active=True
+                )
+                db.add(user)
+                created += 1
 
-    created = 0
-    for username, password, role, rep_name, display_name in default_users:
-        exists = db.query(User).filter(User.username == username).first()
-        if not exists:
-            user = User(
-                username=username,
-                password_hash=hash_password(password),
-                role=role,
-                rep_name=rep_name,
-                display_name=display_name,
-                is_active=True
-            )
-            db.add(user)
-            created += 1
-
-    db.commit()
-    db.close()
-    print(f"✅ Users ready ({created} new accounts created)")
+        db.commit()
+        print(f"✅ Users ready ({created} new accounts created)")
+    finally:
+        db.close()
