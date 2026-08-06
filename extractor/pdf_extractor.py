@@ -1,262 +1,278 @@
-# extractor/pdf_extractor.py
-# Reads UC/UP invoice PDFs and converts them into structured data.
-# Uses pdfplumber to read each page and extract invoice details.
-
+"""
+extractor/pdf_extractor.py
+Production-hardened UC/UP invoice PDF extractor.
+Integrated from ingest/extractor.py (the original ERP build extractor).
+"""
 import re
 import pdfplumber
-from typing import List, Dict, Any
+from collections import defaultdict
+from typing import Optional, List, Dict, Any
 
-# ---------------------------------------------------------------
-# REP NAME DETECTION
-# The rep code appears in the invoice. We map it to the full name.
-# ---------------------------------------------------------------
-REP_CODE_MAP = {
-    "VIJAY":   "Vijay",
-    "VJY":     "Vijay",
-    "U.K":     "U. Kannan",
-    "UK":      "U. Kannan",
-    "L.S":     "L. Sreenivasan",
-    "LS":      "L. Sreenivasan",
-    "L.S.C":   "L. Sreenivasan (Covai)",
-    "LSC":     "L. Sreenivasan (Covai)",
-    "BABU":    "Babu",
-    "TDK":     "T. Dhinakaran",
-    "T.D.K":   "T. Dhinakaran",
-    "DEEPAK":  "Deepak",
-    "DPK":     "Deepak",
+# ── Seller GSTINs ─────────────────────────────────────────────────────────
+SELLER_GSTIN_UC = "33ABRPA4038N1ZI"
+SELLER_GSTIN_UP = "33AWOPS1931N1Z0"
+ALL_SELLER_GSTINS = {SELLER_GSTIN_UC, SELLER_GSTIN_UP}
+
+# ── ASRK dealer GSTIN → party_uid ────────────────────────────────────────
+ASRK_GSTIN_UID = {
+    "33BPVPM9524C1ZM": "CBE-ARASAN-01",
+    "33BDQPS2381Q1ZO": "TRY-SRIMAN-01",
+    "33CLTPR0053C1Z8": "MDU-RAJ-01",
+    "33AAMFK8693B1Z4": "ERD-KISHOR-01",
 }
 
-# Month number to label
-MONTH_LABELS = {
-    "01": "Jan", "02": "Feb", "03": "Mar", "04": "Apr",
-    "05": "May", "06": "Jun", "07": "Jul", "08": "Aug",
-    "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dec"
+# ── City abbreviation table ───────────────────────────────────────────────
+CITY_ABBR = {
+    "COIMBATORE":"CBE","MADURAI":"MDU","ERODE":"ERD","TRICHY":"TRY",
+    "TIRUCHIRAPPALLI":"TRY","TIRUNELVELI":"TVL","DINDIGUL":"DGL",
+    "THENI":"THN","SATTUR":"STR","VIRUDHUNAGAR":"VDN","RAJAPALAYAM":"RJP",
+    "PARAMAKUDI":"PAR","ELUMALAI":"ELU","KANYAKUMARI":"KAN","PALANI":"PLN",
+    "TIRUPUR":"TUP","TENKASI":"TEN","ARUPPUKKOTTAI":"ARU","THIRUMANGALAM":"THI",
+    "BANGALORE":"BLR","BENGALURU":"BLR","POLLACHI":"PLI","THANJAVUR":"THA",
+    "KARUR":"KAR","PUDUKOTTAI":"PUK","PUDUKKOTTAI":"PUK","KUMBAKONAM":"KUM",
+    "NAGAPATTINAM":"NAG","RAMANATHAPURAM":"RAM","SIVAGANGAI":"SIV",
+    "USILAMPATTI":"USL","DEVAKOTTAI":"DEV","KARAIKUDI":"KAK","ARANTHANGI":"ARA",
+    "CUMBUM":"CUM","ODDANCHATRAM":"ODC","AUNDIPATTI":"AND","VIRALIMALAI":"VIR",
+    "MELUR":"MEL","TIRUCHENDUR":"TIR","KOVILPATTI":"KOV","UDANGUDI":"UDA",
+    "SAYALKUDI":"SAY","SIVAKASI":"SIK","SRIVILLIPUTHUR":"SRV","VALLIYOOR":"VAL",
+    "KALLAL":"KAL","SINGAMPUNARI":"SIN","ALANGUDI":"ALA","ILAYANGUDI":"ILA",
+    "MIMISAL":"MIM","KILAKARAI":"KIL","CHINNAMANUR":"CHI","DHARAPURAM":"DHA",
+    "BODINAYAKKANUR":"BOD","GUDALUR":"GUD","PONNAMARAVATHI":"PON",
+    "AMBASAMUDRAM":"AMB","THOOTHUKUDI":"THO","TUTICORIN":"TUT",
+    "NAGERCOIL":"NAG","CHENNAI":"CHN","T.KALLUPATTI":"TKA",
+    "MUTHUKULATHUR":"MUT","MUDUKULATHUR":"MUT","CHELLIAMPATTI":"CHE",
+    "KOLARPATTI":"KOL","SHOLAVANDAN":"SHO","PERAIYUR":"PER",
+    "PERIYAKULAM":"PRK","THALAVAIPURAM":"THA","KARIYAPATTI":"KAR",
+    "SANKARAMPATTI":"SAN","VILATTIKULAM":"VIL","VRIDDHACHALAM":"VRD",
+    "ULUNDURPET":"ULU","SANGARAPURAM":"SAN","KODAI ROAD":"KOD",
+    "TIRUPATTUR":"TIP","PARAMATHIVELUR":"PAR","MADUKKUR":"MAD",
+    "MANDAPAM":"MAN","THIRUMAYAM":"THI","THIRUTHANGAL":"THI",
 }
 
+# ── Rep map ───────────────────────────────────────────────────────────────
+REP_MAP = {
+    "VIJAY":   ("Vijay",                  "Sattur Region",               "VJ-STN"),
+    "U.K":     ("U. Kannan",              "Pollachi Region",             "UK-WCN"),
+    "L.S":     ("L. Sreenivasan",         "West TN",                     "LS-WTN"),
+    "L.S.C":   ("L. Sreenivasan (Covai)", "CBE Region",                  "LSC-CBE"),
+    "BABU":    ("Babu",                   "Kerala",                      "BA-KER"),
+    "M.BABU":  ("Babu",                   "Kerala",                      "BA-KER"),
+    "TDK":     ("T. Dhinakaran",          "Chennai",                     "TDK-CHN"),
+    "DEEPAK":  ("Deepak",                 "Bangalore (Karnataka)",        "DP-KRN"),
+    "PHONE":   ("Direct Order",           "Direct / Walk-in Orders",     "DI-DIR"),
+    "DIRECT":  ("Direct Order",           "Direct / Walk-in Orders",     "DI-DIR"),
+    "AAKASH":  ("Aakash (Mktg Head)",     "Internal – Management Orders","AK-MGT"),
+    "AKASH":   ("Aakash (Mktg Head)",     "Internal – Management Orders","AK-MGT"),
+    "A.A":     ("Aakash (Mktg Head)",     "Internal – Management Orders","AK-MGT"),
+    "UT-BGL":  ("Universal Tradings BLR", "Bangalore (Karnataka)",       "UT-BLR"),
+    "UT-BLR":  ("Universal Tradings BLR", "Bangalore (Karnataka)",       "UT-BLR"),
+}
 
-def clean_amount(value: str) -> float:
-    """Convert '1,23,456.78' string to float 123456.78"""
-    if not value:
-        return 0.0
-    cleaned = re.sub(r"[^\d.]", "", str(value))
-    try:
-        return float(cleaned)
-    except ValueError:
-        return 0.0
+# ── In-memory party UID state ─────────────────────────────────────────────
+_gstin_uid_map: dict = {}
+_name_uid_map:  dict = {}
+_uid_counter: defaultdict = defaultdict(int)
 
 
-def detect_rep(text: str) -> str:
-    """Try to find the rep code in an invoice's text"""
-    text_upper = text.upper()
-    for code, name in REP_CODE_MAP.items():
-        if re.search(r'\b' + re.escape(code) + r'\b', text_upper):
-            return name
-    return "Direct Order"
+def _city_code(place: str) -> str:
+    p = re.sub(r"-\d[\d\s]*$", "", place.strip().upper()).strip()
+    p = re.sub(r"\s*(DIST|TOWN|CITY)$", "", p).strip()
+    if p in CITY_ABBR:
+        return CITY_ABBR[p]
+    first = p.split()[0] if p else "UNK"
+    return CITY_ABBR.get(first, first[:3] if first else "UNK")
 
 
-def extract_date_parts(date_str: str) -> Dict:
-    """
-    Parse 'DD-MM-YYYY' or 'DD/MM/YYYY' into parts.
-    Returns dict with month, year, month_label
-    """
-    date_str = str(date_str).strip()
-    # Try DD-MM-YYYY
-    m = re.match(r"(\d{2})[-/](\d{2})[-/](\d{4})", date_str)
-    if m:
-        day, month, year = m.group(1), m.group(2), m.group(3)
-        label = f"{MONTH_LABELS.get(month, month)}-{year}"
-        return {"day": day, "month": month, "year": year, "month_label": label}
-    return {"day": "01", "month": "04", "year": "2026", "month_label": "Apr-2026"}
+def _make_party_uid(gstin: str, buyer_name: str, place: str) -> str:
+    if gstin and gstin in ASRK_GSTIN_UID:
+        uid = ASRK_GSTIN_UID[gstin]
+        _gstin_uid_map[gstin] = uid
+        return uid
+    if gstin and gstin in _gstin_uid_map:
+        return _gstin_uid_map[gstin]
+    cc  = _city_code(place)
+    fn  = re.sub(r"[^A-Z0-9]", "", (buyer_name or "").split()[0].upper() if (buyer_name or "").split() else "UNK")[:6]
+    key = f"{cc}-{fn}"
+    if key in _name_uid_map:
+        return _name_uid_map[key]
+    _uid_counter[key] += 1
+    uid = f"{key}-{_uid_counter[key]:02d}"
+    _name_uid_map[key] = uid
+    if gstin:
+        _gstin_uid_map[gstin] = uid
+    return uid
+
+
+def _dedup(s: str) -> str:
+    s = s.strip().rstrip(",").strip()
+    words = s.split()
+    n = len(words)
+    for half in range(1, n // 2 + 1):
+        if words[:half] == words[half: half * 2]:
+            return " ".join(words[:half])
+    return s
+
+
+def _parse_rep(ord_raw: str) -> tuple:
+    r = (ord_raw or "").strip().upper().replace(" ", "")
+    for code, (name, area, ac) in REP_MAP.items():
+        if r == code.replace(" ", "").upper():
+            return code, name, area, ac
+    return "DIRECT", "Direct Order", "Direct / Walk-in Orders", "DI-DIR"
+
+
+def _parse_products(lines: list) -> list:
+    pat = re.compile(
+        r"^(\d+)\s+(.+?)\s+(\d+%)\s+(\d{8})\s+(\S+)\s+(\S+)\s+(\S+)\s+([\d,]+(?:\.\d+)?)\s+([\d,]+(?:\.\d+)?)$"
+    )
+    products = []
+    for line in lines:
+        m = pat.match(line.strip())
+        if m:
+            sno, prod, gst, hsn, pack, qty, items, rate, amt = m.groups()
+            try:
+                products.append({
+                    "sno": sno, "product": prod.strip(),
+                    "gst_pct": gst, "hsn": hsn,
+                    "packing": pack, "quantity": qty, "items": items,
+                    "rate": float(rate.replace(",", "")),
+                    "amount": float(amt.replace(",", "")),
+                })
+            except ValueError:
+                pass
+    return products
+
+
+def _parse_page(text: str, pdf_page: int, source_pdf: str, company: str, seller_gstin: str) -> Optional[dict]:
+    """Parse one PDF page into an invoice dict. Returns None for blank pages."""
+    irn_m   = re.search(r"IRN\s*:\s*([a-f0-9]{64})", text)
+    ack_m   = re.search(r"Ack No\.\:\s*(\d+)", text)
+    eway_m  = re.search(r"E-?Way Bill[:\s]+(\d{12})", text)
+    inv_m   = re.search(r"Inv\.No\.\:\s*(\d+)", text)
+    date_m  = re.search(r"Date\s*:\s*(\d{2}-\d{2}-\d{4})", text)
+    place_m = re.search(r"Place\s*:\s*([^\n]+)", text)
+    state_m = re.search(r"State\s*:\s*([^\n]+)", text)
+
+    inv_no   = inv_m.group(1)  if inv_m   else ""
+    inv_date = date_m.group(1) if date_m  else ""
+    place    = (place_m.group(1).strip().rstrip(",").strip() if place_m else "")
+    state    = (state_m.group(1).strip() if state_m else "")
+
+    if not inv_no:   # MF-05: skip blank/non-invoice pages
+        return None
+
+    irn  = irn_m.group(1)  if irn_m  else ""
+    ack  = ack_m.group(1)  if ack_m  else ""
+    eway = eway_m.group(1) if eway_m else ""
+
+    parts      = inv_date.split("-") if inv_date else ["01","07","2026"]
+    month_s    = parts[1] if len(parts) > 1 else "07"
+    year_s     = parts[2] if len(parts) > 2 else "2026"
+    mon_name   = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][int(month_s)]
+    month_label= f"{mon_name}-{year_s}"
+
+    all_gstins  = re.findall(r"GSTIN\s*[:：]\s*(\d{2}[A-Z0-9]{13})", text)
+    buyer_gstin = next((g for g in all_gstins if g not in ALL_SELLER_GSTINS), "")
+
+    buyer_name = buyer_address = city_pincode = ""
+    addr_lines: list = []
+    in_buyer = False
+    for line in text.split("\n"):
+        line = line.strip()
+        if "Billed to Buyer" in line or "LORRY COPY" in line:
+            in_buyer = True; continue
+        if not in_buyer: continue
+        if re.search(r"^SNo\s+Product|^(Phone|State|GSTIN)\s*:|Bank Name|CGST|SGST", line, re.I): break
+        if re.match(r"^(Date|Place|State)\s*:", line, re.I): continue
+        cleaned = _dedup(line.split("Inv.No.")[0] if "Inv.No." in line else line)
+        if cleaned:
+            addr_lines.append(cleaned)
+
+    if addr_lines:
+        buyer_name = addr_lines[0]
+        for part in addr_lines[1:]:
+            if re.search(r"\d{3}[\s\-]\d{3}", part) and not city_pincode:
+                city_pincode = part
+            buyer_address = (buyer_address + ", " + part).lstrip(", ")
+
+    if not city_pincode:
+        city_pincode = place
+
+    ord_m   = re.search(r"Ord\.No\.\s*:\s*([^\n]+)", text)
+    lorry_m = re.search(r"Lorry\s*:\s*([^\n]+)", text)
+    odate_m = re.search(r"Ord\.Date[:\s]+(\d{2}-\d{2}-\d{4})", text)
+    ord_raw  = (ord_m.group(1).strip() if ord_m else "").split("Ord.Date")[0].strip()
+    lorry    = (lorry_m.group(1).strip() if lorry_m else "").split("GRAND")[0].strip()
+    ord_date = odate_m.group(1).strip() if odate_m else inv_date
+    _, rep_name, geo_area, area_code = _parse_rep(ord_raw)
+
+    flat   = text.replace("\n", " ")
+    tax_m  = re.search(r"(?:CGST|SGST)\s*@\s*[\d.]+%\s+on\s+([\d,]+(?:\.\d+)?)", flat)
+    cgst_m = re.search(r"CGST\s*@\s*[\d.]+%\s+on\s+[\d,\.]+\s+([\d,]+(?:\.\d+)?)", flat)
+    igst_m = re.search(r"IGST\s*@\s*[\d.]+%\s+on\s+([\d,]+(?:\.\d+)?)\s+([\d,]+(?:\.\d+)?)", flat)
+    gt_m   = re.search(r"GRAND TOTAL\s+([\d,]+(?:\.\d+)?)", flat)
+    tot_m  = re.search(r"Total\s*-->\s*\S+\s+([\d,]+(?:\.\d+)?)", flat)
+
+    taxable = float(tax_m.group(1).replace(",","")) if tax_m else \
+              float(tot_m.group(1).replace(",","")) if tot_m else 0.0
+    cgst    = float(cgst_m.group(1).replace(",","")) if cgst_m else 0.0
+    igst    = float(igst_m.group(2).replace(",","")) if igst_m else 0.0
+    gt      = float(gt_m.group(1).replace(",","")) if gt_m else (taxable + cgst * 2 + igst)
+
+    products = _parse_products(text.split("\n"))
+    party_uid = _make_party_uid(buyer_gstin, buyer_name, place)
+
+    return {
+        "company":       company,
+        "source_pdf":    source_pdf,
+        "pdf_page":      pdf_page,
+        "month_label":   month_label,
+        "inv_no":        inv_no,
+        "inv_date":      inv_date,
+        "month":         month_s,
+        "year":          year_s,
+        "irn":           irn,
+        "ack_no":        ack,
+        "ewaybill":      eway,
+        "buyer_name":    buyer_name,
+        "buyer_address": buyer_address,
+        "place":         place,
+        "state":         state,
+        "buyer_gstin":   buyer_gstin,
+        "party_uid":     party_uid,
+        "products":      products,
+        "grand_total":   gt,
+        "taxable_value": taxable,
+        "cgst":          cgst,
+        "igst":          igst,
+        "sgst":          cgst,   # SGST = CGST for intrastate
+        "rep_name":      rep_name,
+        "area_code":     area_code,
+        "ord_no_raw":    ord_raw,
+        "lorry":         lorry,
+    }
 
 
 def extract_invoices_from_pdf(pdf_path: str, company: str) -> List[Dict[str, Any]]:
     """
-    Main function: reads a PDF file and returns a list of invoice dictionaries.
-    Each dictionary has the same structure as the BILLS array in Erp_Final.html.
-
-    NOTE: UC and UP invoice PDFs have a similar layout.
-    This extractor handles the standard format.
-    If some invoices are missed, we can tune it - just report to buddy.
+    Main function: reads a UC/UP invoice PDF and returns list of invoice dicts.
+    Uses the production-hardened parser — same one used to build Erp_Final.html.
     """
+    seller_gstin = SELLER_GSTIN_UC if company == "UC" else SELLER_GSTIN_UP
     invoices = []
+    skipped  = 0
 
     with pdfplumber.open(pdf_path) as pdf:
-        print(f"  📄 Reading {len(pdf.pages)} pages from {pdf_path}...")
-
-        current_invoice = None
+        total = len(pdf.pages)
+        print(f"  📄 Reading {total} pages ({company}) from {pdf_path} ...")
 
         for page_num, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""
-            lines = [line.strip() for line in text.split("\n") if line.strip()]
-
-            # Each page in UC/UP PDFs = one invoice
-            # Look for invoice number pattern
-            inv_no = None
-            inv_date = None
-            buyer_name = None
-            gstin = None
-            place = None
-            grand_total = 0.0
-            taxable_value = 0.0
-            cgst = 0.0
-            sgst = 0.0
-            igst = 0.0
-            irn = ""
-            products = []
-
-            full_text = " ".join(lines)
-
-            # --- Invoice Number ---
-            inv_match = re.search(r"Invoice\s*No[:\.]?\s*(\S+)", full_text, re.IGNORECASE)
-            if not inv_match:
-                inv_match = re.search(r"Bill\s*No[:\.]?\s*(\S+)", full_text, re.IGNORECASE)
-            if inv_match:
-                inv_no = inv_match.group(1).strip()
-
-            # --- Invoice Date ---
-            date_match = re.search(r"(\d{2}[-/]\d{2}[-/]\d{4})", full_text)
-            if date_match:
-                inv_date = date_match.group(1)
-
-            # --- Buyer Name (Bill To / Ship To) ---
-            buyer_match = re.search(r"(?:Bill\s*To|Buyer)[:\s]+([^\n]+)", full_text, re.IGNORECASE)
-            if buyer_match:
-                buyer_name = buyer_match.group(1).strip()[:200]
-
-            # --- GSTIN ---
-            gstin_match = re.search(r"GSTIN[:\s]+([A-Z0-9]{15})", full_text, re.IGNORECASE)
-            if gstin_match:
-                gstin = gstin_match.group(1).strip()
-                # party_uid = first 10 chars of GSTIN (company + state code)
-                party_uid = gstin[:10] if gstin else f"NGSTIN_{buyer_name[:20] if buyer_name else 'UNKNOWN'}"
+            result = _parse_page(text, page_num, pdf_path, company, seller_gstin)
+            if result:
+                invoices.append(result)
             else:
-                party_uid = f"NGSTIN_{(buyer_name or 'UNKNOWN')[:20]}"
+                skipped += 1
 
-            # --- Place/City ---
-            place_match = re.search(r"(?:Place|City|District)[:\s]+([A-Za-z ]+)", full_text, re.IGNORECASE)
-            if place_match:
-                place = place_match.group(1).strip()[:100]
-
-            # --- Grand Total ---
-            total_match = re.search(r"Grand\s*Total[:\s₹]*([\d,]+\.?\d*)", full_text, re.IGNORECASE)
-            if not total_match:
-                total_match = re.search(r"Total\s*Amount[:\s₹]*([\d,]+\.?\d*)", full_text, re.IGNORECASE)
-            if total_match:
-                grand_total = clean_amount(total_match.group(1))
-
-            # --- Taxable Value ---
-            tax_match = re.search(r"Taxable\s*(?:Value|Amount)[:\s₹]*([\d,]+\.?\d*)", full_text, re.IGNORECASE)
-            if tax_match:
-                taxable_value = clean_amount(tax_match.group(1))
-
-            # --- CGST ---
-            cgst_match = re.search(r"CGST[:\s₹]*([\d,]+\.?\d*)", full_text, re.IGNORECASE)
-            if cgst_match:
-                cgst = clean_amount(cgst_match.group(1))
-
-            # --- SGST ---
-            sgst_match = re.search(r"SGST[:\s₹]*([\d,]+\.?\d*)", full_text, re.IGNORECASE)
-            if sgst_match:
-                sgst = clean_amount(sgst_match.group(1))
-
-            # --- IGST ---
-            igst_match = re.search(r"IGST[:\s₹]*([\d,]+\.?\d*)", full_text, re.IGNORECASE)
-            if igst_match:
-                igst = clean_amount(igst_match.group(1))
-
-            # --- IRN ---
-            irn_match = re.search(r"IRN[:\s]+([a-f0-9]{8,})", full_text, re.IGNORECASE)
-            if irn_match:
-                irn = irn_match.group(1)[:200]
-
-            # --- Rep Name ---
-            rep_name = detect_rep(full_text)
-
-            # --- Product Table ---
-            # Try to extract table using pdfplumber
-            try:
-                tables = page.extract_tables()
-                for table in tables:
-                    for row in table:
-                        if not row or len(row) < 3:
-                            continue
-                        # A product row usually has: SL, Product name, HSN, Qty, Rate, Amount
-                        row_text = " ".join(str(c) for c in row if c)
-                        # Skip header rows
-                        if any(kw in row_text.upper() for kw in ["DESCRIPTION", "HSN", "S.NO", "ITEM", "PRODUCT"]):
-                            continue
-                        # Skip total rows
-                        if any(kw in row_text.upper() for kw in ["TOTAL", "GRAND", "CGST", "SGST", "IGST"]):
-                            continue
-
-                        # Try to find amount in last column
-                        amount_val = 0.0
-                        for cell in reversed(row):
-                            if cell:
-                                amt = clean_amount(str(cell))
-                                if amt > 0:
-                                    amount_val = amt
-                                    break
-
-                        # Product name is usually in column 1 or 2
-                        prod_name = ""
-                        for cell in row[1:4]:
-                            if cell and len(str(cell)) > 3 and not re.match(r"^\d+$", str(cell)):
-                                prod_name = str(cell).strip()
-                                break
-
-                        if prod_name and amount_val > 0:
-                            # Try to get quantity
-                            qty = 0.0
-                            for cell in row:
-                                if cell:
-                                    try:
-                                        v = float(re.sub(r"[^\d.]", "", str(cell)))
-                                        if 0 < v < 10000 and v != amount_val:
-                                            qty = v
-                                            break
-                                    except Exception:
-                                        pass
-
-                            products.append({
-                                "product": prod_name[:300],
-                                "packing": "",
-                                "quantity": str(qty),
-                                "items": qty,
-                                "rate": 0.0,
-                                "amount": amount_val,
-                                "hsn": "",
-                                "gst_pct": "18"
-                            })
-            except Exception:
-                pass  # If table extraction fails, we still save the invoice header
-
-            # Only save if we got at least an invoice number or total
-            if inv_no or grand_total > 0:
-                date_parts = extract_date_parts(inv_date or "")
-                invoices.append({
-                    "company":       company,
-                    "source_pdf":    pdf_path,
-                    "pdf_page":      page_num,
-                    "inv_no":        inv_no or f"P{page_num}",
-                    "inv_date":      inv_date or "",
-                    "month":         date_parts["month"],
-                    "year":          date_parts["year"],
-                    "month_label":   date_parts["month_label"],
-                    "buyer_name":    buyer_name or "Unknown Party",
-                    "party_uid":     party_uid,
-                    "place":         place or "",
-                    "rep_name":      rep_name,
-                    "area_code":     "",
-                    "grand_total":   grand_total,
-                    "taxable_value": taxable_value,
-                    "cgst":          cgst,
-                    "sgst":          sgst,
-                    "igst":          igst,
-                    "irn":           irn,
-                    "products":      products
-                })
-
-        print(f"  ✅ Extracted {len(invoices)} invoices from {page_num} pages")
-
+    print(f"  ✅ Extracted {len(invoices)} invoices ({skipped} blank pages skipped)")
     return invoices
