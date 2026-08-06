@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+.env
+venv/
+env/
+*.egg-info/
+
+# Local files (NOT for GitHub)
+.env
+*.db
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# The large HTML dashboard (we'll copy it manually)
+# static/Erp_Final.html

@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Upload Daily Invoices — United Paints ERP</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #F4F6FA;
+    color: #1A1A2E;
+    min-height: 100vh;
+    padding: 24px 16px;
+  }
+  .topbar {
+    background: #1A5EA8;
+    color: #fff;
+    padding: 16px 24px;
+    border-radius: 12px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .topbar h1 { font-size: 18px; font-weight: 700; }
+  .topbar .links a {
+    color: rgba(255,255,255,0.85);
+    text-decoration: none;
+    font-size: 14px;
+    margin-left: 16px;
+  }
+  .topbar .links a:hover { color: #fff; }
+  .card {
+    background: #fff;
+    border-radius: 14px;
+    padding: 28px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  }
+  .card h2 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 18px;
+    color: #1A1A2E;
+    padding-bottom: 12px;
+    border-bottom: 1.5px solid #F0F0F0;
+  }
+  .form-row {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+  .form-group { flex: 1; min-width: 180px; }
+  .form-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #555;
+    margin-bottom: 6px;
+  }
+  .form-group select, .form-group input[type=file] {
+    width: 100%;
+    padding: 11px 14px;
+    border: 1.5px solid #E0E0E0;
+    border-radius: 8px;
+    font-size: 14px;
+    outline: none;
+    background: #FAFAFA;
+    cursor: pointer;
+  }
+  .form-group select:focus { border-color: #1A5EA8; }
+  .drop-zone {
+    border: 2.5px dashed #C0CDE0;
+    border-radius: 12px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    margin-bottom: 18px;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: #1A5EA8;
+    background: #F0F7FF;
+  }
+  .drop-zone .icon { font-size: 36px; margin-bottom: 10px; }
+  .drop-zone .main-text { font-size: 16px; font-weight: 600; color: #333; margin-bottom: 6px; }
+  .drop-zone .sub-text { font-size: 13px; color: #888; }
+  .selected-files { margin-bottom: 18px; }
+  .file-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #EAF2FF;
+    color: #1A5EA8;
+    border-radius: 20px;
+    padding: 5px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    margin: 4px 4px 4px 0;
+  }
+  .file-chip .remove {
+    cursor: pointer;
+    font-weight: 700;
+    color: #999;
+    font-size: 14px;
+  }
+  .file-chip .remove:hover { color: #c00; }
+  .btn {
+    padding: 13px 28px;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .btn-primary { background: #1A5EA8; color: #fff; width: 100%; }
+  .btn-primary:hover:not(:disabled) { background: #0C447C; }
+  .btn-primary:disabled { background: #B0C4D8; cursor: not-allowed; }
+  .btn-secondary { background: #F0F0F0; color: #333; }
+  .btn-secondary:hover { background: #E0E0E0; }
+  .result-box {
+    margin-top: 18px;
+    padding: 16px;
+    border-radius: 10px;
+    font-size: 14px;
+    display: none;
+  }
+  .result-box.success { background: #EAF7F0; border: 1px solid #B2DFCA; color: #0A5C30; }
+  .result-box.error   { background: #FFF0F0; border: 1px solid #FFD0D0; color: #A00; }
+  .progress-bar {
+    height: 8px;
+    background: #E8EEF4;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 14px;
+    display: none;
+  }
+  .progress-fill {
+    height: 100%;
+    background: #1A5EA8;
+    border-radius: 4px;
+    width: 0%;
+    transition: width 0.3s;
+  }
+  .log-box {
+    background: #F4F6FA;
+    border: 1px solid #E0E0E0;
+    border-radius: 8px;
+    padding: 14px;
+    font-family: monospace;
+    font-size: 13px;
+    max-height: 220px;
+    overflow-y: auto;
+    margin-top: 14px;
+    display: none;
+    line-height: 1.7;
+  }
+  .instructions { background: #FFF9E6; border: 1px solid #FFE082; border-radius: 10px; padding: 16px 18px; }
+  .instructions h3 { font-size: 14px; font-weight: 600; color: #7A5800; margin-bottom: 10px; }
+  .instructions ol { padding-left: 18px; font-size: 13px; color: #5C4A00; line-height: 2; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>📤 Daily Invoice Upload</h1>
+  <div class="links">
+    <a href="/dashboard">← Back to Dashboard</a>
+    <a href="#" onclick="logout()">Logout</a>
+  </div>
+</div>
+
+<!-- Instructions -->
+<div class="card instructions">
+  <h3>📋 How to upload daily invoices (takes 2 minutes!)</h3>
+  <ol>
+    <li>Go to Google Drive → download today's invoice PDFs</li>
+    <li>Select company: UC or UP (upload them separately)</li>
+    <li>Drag and drop the PDF files below (or click to browse)</li>
+    <li>Click "Upload & Process" — dashboard updates automatically!</li>
+  </ol>
+</div>
+
+<!-- Upload Form -->
+<div class="card">
+  <h2>Upload Invoice PDFs</h2>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>COMPANY</label>
+      <select id="company">
+        <option value="UC">UC — United Chemicals</option>
+        <option value="UP">UP — United Paints</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+    <div class="icon">📄</div>
+    <div class="main-text">Drag PDF files here, or click to select</div>
+    <div class="sub-text">You can select multiple files at once. PDF only.</div>
+  </div>
+
+  <input type="file" id="fileInput" accept=".pdf" multiple style="display:none"
+         onchange="onFilesSelected(this.files)">
+
+  <div class="selected-files" id="selectedFiles"></div>
+
+  <button class="btn btn-primary" id="uploadBtn" onclick="startUpload()" disabled>
+    Upload &amp; Process
+  </button>
+
+  <div class="progress-bar" id="progressBar">
+    <div class="progress-fill" id="progressFill"></div>
+  </div>
+
+  <div class="log-box" id="logBox"></div>
+
+  <div class="result-box" id="resultBox"></div>
+</div>
+
+<script>
+  // Check login
+  var token    = localStorage.getItem('erp_token');
+  var userStr  = localStorage.getItem('erp_user');
+  var user     = userStr ? JSON.parse(userStr) : null;
+
+  if (!token || !user) {
+    window.location.replace('/');
+  } else if (user.role !== 'admin') {
+    alert('Only admin can access the upload page.');
+    window.location.replace('/dashboard');
+  }
+
+  var selectedFiles = [];
+
+  // Drag and drop support
+  var dropZone = document.getElementById('dropZone');
+  dropZone.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    dropZone.classList.add('drag-over');
+  });
+  dropZone.addEventListener('dragleave', function() {
+    dropZone.classList.remove('drag-over');
+  });
+  dropZone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    onFilesSelected(e.dataTransfer.files);
+  });
+
+  function onFilesSelected(files) {
+    for (var i = 0; i < files.length; i++) {
+      if (files[i].name.toLowerCase().endsWith('.pdf')) {
+        selectedFiles.push(files[i]);
+      }
+    }
+    renderFileChips();
+    document.getElementById('uploadBtn').disabled = selectedFiles.length === 0;
+  }
+
+  function renderFileChips() {
+    var container = document.getElementById('selectedFiles');
+    container.innerHTML = '';
+    selectedFiles.forEach(function(file, idx) {
+      var chip = document.createElement('span');
+      chip.className = 'file-chip';
+      chip.innerHTML = '📄 ' + file.name + ' <span class="remove" onclick="removeFile(' + idx + ')">×</span>';
+      container.appendChild(chip);
+    });
+  }
+
+  function removeFile(idx) {
+    selectedFiles.splice(idx, 1);
+    renderFileChips();
+    document.getElementById('uploadBtn').disabled = selectedFiles.length === 0;
+  }
+
+  async function startUpload() {
+    if (selectedFiles.length === 0) return;
+
+    var company    = document.getElementById('company').value;
+    var btn        = document.getElementById('uploadBtn');
+    var logBox     = document.getElementById('logBox');
+    var resultBox  = document.getElementById('resultBox');
+    var progressBar = document.getElementById('progressBar');
+    var progressFill = document.getElementById('progressFill');
+
+    btn.disabled = true;
+    btn.textContent = 'Processing...';
+    logBox.style.display = 'block';
+    logBox.innerHTML = '🚀 Starting upload for ' + company + '...\n';
+    resultBox.style.display = 'none';
+    progressBar.style.display = 'block';
+
+    var totalSaved = 0;
+    var totalErrors = 0;
+
+    for (var i = 0; i < selectedFiles.length; i++) {
+      var file = selectedFiles[i];
+      logBox.innerHTML += '\n📄 Uploading: ' + file.name + '...';
+      logBox.scrollTop = logBox.scrollHeight;
+
+      // Update progress bar
+      progressFill.style.width = ((i / selectedFiles.length) * 100) + '%';
+
+      var formData = new FormData();
+      formData.append('file', file);
+      formData.append('company', company);
+
+      try {
+        var response = await fetch('/api/upload/pdf', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token },
+          body: formData
+        });
+        var data = await response.json();
+
+        if (response.ok) {
+          logBox.innerHTML += '\n   ✅ ' + (data.message || 'Done') + ' | Saved: ' + data.saved + ' | Skipped: ' + data.skipped_dupe;
+          totalSaved += data.saved;
+        } else {
+          logBox.innerHTML += '\n   ❌ Error: ' + (data.detail || 'Failed');
+          totalErrors++;
+        }
+      } catch (err) {
+        logBox.innerHTML += '\n   ❌ Network error: ' + err.message;
+        totalErrors++;
+      }
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    progressFill.style.width = '100%';
+
+    // Show result
+    resultBox.style.display = 'block';
+    if (totalErrors === 0) {
+      resultBox.className = 'result-box success';
+      resultBox.innerHTML = '🎉 All done! <strong>' + totalSaved + ' new invoices</strong> saved to the database. Dashboard is now updated!';
+    } else {
+      resultBox.className = 'result-box error';
+      resultBox.innerHTML = '⚠️ ' + totalSaved + ' invoices saved. ' + totalErrors + ' files had errors. Check the log above.';
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Upload & Process';
+    selectedFiles = [];
+    renderFileChips();
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  function logout() {
+    localStorage.clear();
+    window.location.replace('/');
+  }
+</script>
+</body>
+</html>

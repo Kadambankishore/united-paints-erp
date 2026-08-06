@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>United Paints ERP — Login</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0A1628;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .wrapper {
+    width: 100%;
+    max-width: 400px;
+  }
+  .card {
+    background: #ffffff;
+    border-radius: 20px;
+    padding: 40px 36px 36px;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+  }
+  .header {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .logo-box {
+    width: 64px;
+    height: 64px;
+    background: #1A5EA8;
+    border-radius: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 16px;
+    font-size: 28px;
+  }
+  .title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #0A1628;
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    font-size: 14px;
+    color: #888;
+  }
+  .divider {
+    height: 1px;
+    background: #F0F0F0;
+    margin: 0 -36px 28px;
+  }
+  .field { margin-bottom: 18px; }
+  .field label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #444;
+    margin-bottom: 7px;
+    letter-spacing: 0.02em;
+  }
+  .field input {
+    width: 100%;
+    padding: 13px 16px;
+    border: 1.5px solid #E4E4E4;
+    border-radius: 10px;
+    font-size: 15px;
+    color: #1A1A1A;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    background: #FAFAFA;
+  }
+  .field input:focus {
+    border-color: #1A5EA8;
+    background: #fff;
+    box-shadow: 0 0 0 3px rgba(26,94,168,0.1);
+  }
+  .btn {
+    width: 100%;
+    padding: 14px;
+    background: #1A5EA8;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 6px;
+    transition: background 0.2s, transform 0.1s;
+    letter-spacing: 0.02em;
+  }
+  .btn:hover  { background: #0C447C; }
+  .btn:active { transform: scale(0.99); }
+  .btn:disabled { background: #B0C4D8; cursor: not-allowed; }
+  .error-box {
+    background: #FFF0F0;
+    border: 1px solid #FFD0D0;
+    color: #B00;
+    border-radius: 8px;
+    padding: 11px 14px;
+    font-size: 13px;
+    margin-top: 14px;
+    display: none;
+  }
+  .footer {
+    text-align: center;
+    margin-top: 28px;
+    font-size: 12px;
+    color: #B0B0B0;
+    line-height: 1.6;
+  }
+  .spinner {
+    display: inline-block;
+    width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,0.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <div class="card">
+    <div class="header">
+      <div class="logo-box">🏭</div>
+      <div class="title">United Paints ERP</div>
+      <div class="subtitle">Invoice Intelligence Dashboard</div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="field">
+      <label>USERNAME</label>
+      <input type="text" id="username" placeholder="Enter your username"
+             autocomplete="username" autocapitalize="off" autocorrect="off">
+    </div>
+
+    <div class="field">
+      <label>PASSWORD</label>
+      <input type="password" id="password" placeholder="Enter your password"
+             autocomplete="current-password">
+    </div>
+
+    <button class="btn" id="loginBtn" onclick="doLogin()">
+      Login
+    </button>
+
+    <div class="error-box" id="errorBox"></div>
+
+    <div class="footer">
+      United Chemicals &amp; United Paints, Madurai<br>
+      <span style="font-size:11px;color:#CCC;">For support: contact Muruga</span>
+    </div>
+  </div>
+</div>
+
+<script>
+  // If already logged in, skip login page
+  if (localStorage.getItem('erp_token')) {
+    window.location.replace('/dashboard');
+  }
+
+  // Focus username on page load
+  document.getElementById('username').focus();
+
+  // Press Enter key to login
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') doLogin();
+  });
+
+  async function doLogin() {
+    var username = document.getElementById('username').value.trim().toLowerCase();
+    var password = document.getElementById('password').value;
+    var btn      = document.getElementById('loginBtn');
+    var errorBox = document.getElementById('errorBox');
+
+    // Basic validation
+    if (!username) { showError('Please enter your username.'); return; }
+    if (!password) { showError('Please enter your password.'); return; }
+
+    // Show loading state
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Logging in...';
+    errorBox.style.display = 'none';
+
+    try {
+      var response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: password })
+      });
+
+      var data = await response.json();
+
+      if (response.ok) {
+        // Save token and user info in browser storage
+        localStorage.setItem('erp_token', data.token);
+        localStorage.setItem('erp_user', JSON.stringify({
+          username:     data.username,
+          display_name: data.display_name,
+          role:         data.role,
+          rep_name:     data.rep_name
+        }));
+        // Go to dashboard
+        window.location.replace('/dashboard');
+      } else {
+        showError(data.detail || 'Login failed. Please try again.');
+      }
+
+    } catch (err) {
+      showError('Cannot reach the server. Please check your internet connection.');
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = 'Login';
+  }
+
+  function showError(msg) {
+    var el = document.getElementById('errorBox');
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+</script>
+</body>
+</html>
