@@ -279,7 +279,7 @@ def verify_data():
             Invoice.company,
             func.count(Invoice.id).label("count"),
             func.sum(Invoice.grand_total).label("revenue")
-        ).group_by(Invoice.month_label, Invoice.company)\
+        ).group_by(Invoice.month_label, Invoice.month, Invoice.year, Invoice.company)\
          .order_by(Invoice.year, Invoice.month, Invoice.company).all()
 
         # By rep (top 10)
