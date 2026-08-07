@@ -352,9 +352,9 @@ def dashboard():
         return HTMLResponse("<h2 style='font-family:sans-serif;padding:40px'>Dashboard file missing.</h2>")
 
     with open(path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
+        html = f.read()
 
-    # Auth check — injected into <head>
+    # ── 1. Auth check injected into <head> ───────────────────────
     auth = """<script>
 (function(){
   var t=localStorage.getItem('erp_token'),u=localStorage.getItem('erp_user');
@@ -363,73 +363,54 @@ def dashboard():
   catch(e){localStorage.clear();window.location.replace('/');}
 })();
 </script>"""
+    html = html.replace("<head>", "<head>" + auth, 1)
 
-    # Try to inject live PostgreSQL data
-    live = None
+    # ── 2. Try to inject live PostgreSQL data ────────────────────
     try:
         live = _build_live_bills()
-        print(f"✅ Phase 2: Serving live dashboard — {live['inv_count']} invoices, {live['data_label']}")
+        ts   = datetime.now().strftime("%d-%b-%Y %H:%M")
+        count = live["inv_count"]
+
+        # 2a. Replace the BILLS line (it's a single very long line)
+        bills_start = html.find("const BILLS=[")
+        if bills_start != -1:
+            bills_end = html.find("];", bills_start) + 2   # end after ];
+            new_bills = (
+                f"/* ══ LIVE PostgreSQL DATA — {count} invoices"
+                f" — {live['data_label']} — {ts} ══ */\n"
+                f"const BILLS={live['bills_json']};"
+            )
+            html = html[:bills_start] + new_bills + html[bills_end:]
+
+        # 2b. Inject new month variables right after JUL_PROD line
+        if live["extra_months"]:
+            jul_prod = ("const JUL_PROD = PROD_DATA.filter"
+                        "(b => getM(b.inv_date)==='07' && getY(b.inv_date)==='2026');")
+            if jul_prod in html:
+                html = html.replace(
+                    jul_prod,
+                    jul_prod + "\n" + live["extra_months"],
+                    1
+                )
+
+        # 2c. Replace MONTHS array using regex (safe, handles multiline)
+        months_pattern = r"const MONTHS = \[[\s\S]*?\];"
+        if re.search(months_pattern, html):
+            html = re.sub(months_pattern, live["months_js"], html, count=1)
+
+        # 2d. Replace MONTHS_PROD array using regex
+        months_prod_pattern = r"const MONTHS_PROD = \[[\s\S]*?\];"
+        if re.search(months_prod_pattern, html):
+            html = re.sub(months_prod_pattern, live["months_prod_js"], html, count=1)
+
+        print(f"✅ Phase 2 live: {count} invoices | {live['data_label']}")
+
     except Exception as e:
-        print(f"⚠️ Phase 2 fallback to hardcoded data: {e}")
+        print(f"⚠️  Phase 2 fallback to hardcoded data: {e}")
 
-    # Patch the HTML line by line
-    result = []
-    head_done  = False
-    bills_done = False
-    aug_done   = False   # extra months injected after JUL_PROD
-    months_done = False  # MONTHS replaced
-    months_prod_done = False  # MONTHS_PROD replaced
-
-    for i, line in enumerate(lines):
-        s = line.strip()
-
-        # 1. Inject auth into <head>
-        if not head_done and '<head>' in line:
-            line = line.replace('<head>', '<head>' + auth, 1)
-            head_done = True
-
-        if live:
-            # 2. Replace the BILLS line with live data
-            if not bills_done and s.startswith('const BILLS=['):
-                ts = datetime.now().strftime('%d-%b-%Y %H:%M')
-                line = (f"/* ══ LIVE DATA FROM POSTGRESQL — {live['inv_count']} invoices"
-                        f" — {live['data_label']} — Generated {ts} ══ */\n"
-                        f"const BILLS={live['bills_json']};\n")
-                bills_done = True
-
-            # 3. Inject new month variables right after JUL_PROD line
-            elif (not aug_done and live['extra_months']
-                  and "const JUL_PROD = PROD_DATA" in s):
-                line = line + live['extra_months'] + "\n"
-                aug_done = True
-
-            # 4. Replace MONTHS array (lines 931-936)
-            elif not months_done and s == 'const MONTHS = [':
-                # Skip lines until closing ];
-                result.append(live['months_js'] + "\n")
-                months_done = True
-                # consume until we hit ];
-                j = i + 1
-                while j < len(lines) and lines[j].strip() != '];':
-                    j += 1
-                # skip the ]; line too
-                lines = lines[:i+1] + lines[j+1:]
-                continue
-
-            # 5. Replace MONTHS_PROD array (lines 937-940)
-            elif not months_prod_done and s == 'const MONTHS_PROD = [':
-                result.append(live['months_prod_js'] + "\n")
-                months_prod_done = True
-                j = i + 1
-                while j < len(lines) and lines[j].strip() != '];':
-                    j += 1
-                lines = lines[:i+1] + lines[j+1:]
-                continue
-
-        result.append(line)
-
-    html = "".join(result)
     return HTMLResponse(html)
+
+
 
 
 @app.get("/upload-page", include_in_schema=False)
