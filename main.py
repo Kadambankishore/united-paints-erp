@@ -391,6 +391,89 @@ def verify_data():
 
 
 
+
+
+# ─────────────────────────────────────────────
+#  FIX-DUPLICATES (admin utility - safe to run anytime)
+# ─────────────────────────────────────────────
+@app.get("/fix-duplicates")
+def fix_duplicates():
+    """
+    Finds and removes duplicate invoices (same company + inv_no + year).
+    Keeps the LATEST copy (highest id). Safe to run multiple times.
+    """
+    try:
+        from database import SessionLocal
+        from models import Invoice, InvoiceLineItem
+        from sqlalchemy import func
+
+        db = SessionLocal()
+
+        # Find duplicates: same company + inv_no + year appearing more than once
+        from sqlalchemy import text
+        dupes = db.execute(text("""
+            SELECT company, inv_no, year, COUNT(*) as cnt, MIN(id) as keep_id
+            FROM invoices
+            GROUP BY company, inv_no, year
+            HAVING COUNT(*) > 1
+        """)).fetchall()
+
+        removed = 0
+        for row in dupes:
+            # Delete all duplicates EXCEPT the minimum id (first inserted)
+            to_delete = db.query(Invoice).filter(
+                Invoice.company == row[0],
+                Invoice.inv_no  == row[1],
+                Invoice.year    == row[2],
+                Invoice.id      != row[3]  # keep the first one
+            ).all()
+            for inv in to_delete:
+                db.delete(inv)
+                removed += 1
+
+        db.commit()
+
+        # Get fresh counts
+        total = db.query(Invoice).count()
+        by_month = db.execute(text("""
+            SELECT month_label, company, COUNT(*) as cnt
+            FROM invoices
+            GROUP BY month_label, company
+            ORDER BY year, month, company
+        """)).fetchall()
+        db.close()
+
+        rows = "".join(
+            f"<tr><td style='padding:6px 12px;color:#4A9EE0'>{r[0]}</td>"
+            f"<td style='padding:6px 12px;color:#fff'>{r[1]}</td>"
+            f"<td style='padding:6px 12px;color:#4ade80;text-align:center'>{r[2]}</td></tr>"
+            for r in by_month
+        )
+
+        body = f"""
+        <p style='font-size:18px;color:#4ade80;margin:8px 0'>✅ Removed <strong>{removed}</strong> duplicate invoices</p>
+        <p style='font-size:18px;margin:8px 0'>📊 Total invoices now: <strong style='color:#4ade80'>{total:,}</strong></p>
+        <br>
+        <table style='width:100%;border-collapse:collapse;font-size:13px;margin-top:8px'>
+          <tr style='background:#111d33'>
+            <th style='padding:8px 12px;text-align:left;color:#aaa'>Month</th>
+            <th style='padding:8px 12px;text-align:left;color:#aaa'>Company</th>
+            <th style='padding:8px 12px;text-align:center;color:#aaa'>Invoices</th>
+          </tr>
+          {rows}
+        </table>
+        <br>
+        <a href='/verify' style='color:#4A9EE0'>→ See full verification</a>
+        &nbsp;&nbsp;
+        <a href='/dashboard' style='color:#4A9EE0'>→ Open Dashboard</a>
+        """
+        return HTMLResponse(_page(f"Duplicates Fixed!", body))
+
+    except Exception as e:
+        return HTMLResponse(_page("Error", f"<p style='color:#f66'>{e}</p>"), 500)
+
+
+
 @app.exception_handler(404)
 async def not_found(request: Request, exc):
     return FileResponse("static/login.html")
