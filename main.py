@@ -328,6 +328,66 @@ catch(e){localStorage.clear();window.location.replace('/');}})();
 @app.get("/upload-page", include_in_schema=False)
 def upload_page(): return FileResponse("static/upload.html")
 
+
+
+# ── Clean Aug Fakes ───────────────────────────────────────────────
+@app.get("/clean-aug")
+def clean_aug():
+    """
+    Removes fake August invoices (inv_no starting with P like P1, P2...)
+    that were created by the first basic extractor before the fix.
+    Keeps only real invoice numbers (1237-1260 for UC, 1606-1634 for UP).
+    Safe to run once.
+    """
+    try:
+        from database import SessionLocal
+        from models import Invoice
+        db = SessionLocal()
+
+        # Find fake Aug invoices (inv_no starts with P followed by digits)
+        fake_aug = db.query(Invoice).filter(
+            Invoice.month_label.like("Aug-%"),
+            Invoice.inv_no.op("~")(r"^P\d+$")   # regex: starts with P then digits
+        ).all()
+
+        removed = len(fake_aug)
+        for inv in fake_aug:
+            db.delete(inv)
+
+        db.commit()
+        total = db.query(Invoice).count()
+
+        # Count Aug invoices remaining
+        aug_uc = db.query(Invoice).filter(Invoice.month_label.like("Aug-%"), Invoice.company=="UC").count()
+        aug_up = db.query(Invoice).filter(Invoice.month_label.like("Aug-%"), Invoice.company=="UP").count()
+        db.close()
+
+        body = f"""
+        <p style='font-size:18px;color:#4ade80;margin:8px 0'>✅ Removed <strong>{removed}</strong> fake Aug invoices</p>
+        <p style='font-size:18px;margin:8px 0'>📊 Total invoices now: <strong style='color:#4ade80'>{total:,}</strong></p>
+        <br>
+        <div style='display:flex;gap:16px;justify-content:center;margin:16px 0'>
+          <div style='background:#0d1829;border-radius:10px;padding:16px 24px'>
+            <div style='font-size:13px;color:#aaa'>Aug-2026 UC</div>
+            <div style='font-size:28px;color:#4ade80;font-weight:500'>{aug_uc}</div>
+            <div style='font-size:12px;color:#aaa'>expected: 24</div>
+          </div>
+          <div style='background:#0d1829;border-radius:10px;padding:16px 24px'>
+            <div style='font-size:13px;color:#aaa'>Aug-2026 UP</div>
+            <div style='font-size:28px;color:#4ade80;font-weight:500'>{aug_up}</div>
+            <div style='font-size:12px;color:#aaa'>expected: 29</div>
+          </div>
+        </div>
+        <br>
+        <a href='/verify' style='color:#4A9EE0'>→ Full verify</a>&nbsp;&nbsp;
+        <a href='/upload-page' style='color:#4A9EE0'>→ Re-upload Aug PDFs if needed</a>
+        """
+        return HTMLResponse(_page("Aug Cleaned!", body))
+    except Exception as e:
+        return HTMLResponse(_page("Error", f"<p style='color:#f66'>{e}</p>"), 500)
+
+
+
 @app.exception_handler(404)
 async def not_found(request: Request, exc):
     return FileResponse("static/login.html")
