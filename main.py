@@ -244,6 +244,153 @@ def upload_page():
     return FileResponse("static/upload.html")
 
 
+
+
+# ─────────────────────────────────────────────
+#  VERIFY  (shows live database invoice counts)
+# ─────────────────────────────────────────────
+@app.get("/verify")
+def verify_data():
+    """
+    Quick verification page — shows exactly how many invoices
+    are in the database, broken down by company and month.
+    No login needed. Use this to confirm uploads worked!
+    """
+    try:
+        from database import SessionLocal
+        from models import Invoice
+        from sqlalchemy import func
+
+        db = SessionLocal()
+
+        # Total count
+        total = db.query(Invoice).count()
+
+        # By company
+        by_company = db.query(
+            Invoice.company,
+            func.count(Invoice.id).label("count"),
+            func.sum(Invoice.grand_total).label("revenue")
+        ).group_by(Invoice.company).all()
+
+        # By month
+        by_month = db.query(
+            Invoice.month_label,
+            Invoice.company,
+            func.count(Invoice.id).label("count"),
+            func.sum(Invoice.grand_total).label("revenue")
+        ).group_by(Invoice.month_label, Invoice.company)\
+         .order_by(Invoice.year, Invoice.month, Invoice.company).all()
+
+        # By rep (top 10)
+        by_rep = db.query(
+            Invoice.rep_name,
+            func.count(Invoice.id).label("count"),
+            func.sum(Invoice.grand_total).label("revenue")
+        ).group_by(Invoice.rep_name)\
+         .order_by(func.sum(Invoice.grand_total).desc()).limit(15).all()
+
+        db.close()
+
+        # Build rows for months table
+        month_rows = ""
+        for r in by_month:
+            rev_l = round((r.revenue or 0)/100000, 2)
+            month_rows += f"""
+            <tr>
+              <td style='padding:8px 12px;border-bottom:1px solid #1e2d47;color:#4A9EE0'>{r.month_label}</td>
+              <td style='padding:8px 12px;border-bottom:1px solid #1e2d47;color:#fff'>{r.company}</td>
+              <td style='padding:8px 12px;border-bottom:1px solid #1e2d47;color:#4ade80;text-align:center'>{r.count}</td>
+              <td style='padding:8px 12px;border-bottom:1px solid #1e2d47;color:#fbbf24;text-align:right'>₹{rev_l:,.2f}L</td>
+            </tr>"""
+
+        # Rep rows
+        rep_rows = ""
+        for r in by_rep:
+            rev_l = round((r.revenue or 0)/100000, 2)
+            rep_rows += f"""
+            <tr>
+              <td style='padding:8px 12px;border-bottom:1px solid #1e2d47;color:#4A9EE0'>{r.rep_name or "Direct Order"}</td>
+              <td style='padding:8px 12px;border-bottom:1px solid #1e2d47;color:#4ade80;text-align:center'>{r.count}</td>
+              <td style='padding:8px 12px;border-bottom:1px solid #1e2d47;color:#fbbf24;text-align:right'>₹{rev_l:,.2f}L</td>
+            </tr>"""
+
+        company_cards = ""
+        for r in by_company:
+            rev_cr = round((r.revenue or 0)/10000000, 2)
+            company_cards += f"""
+            <div style='background:#1a2744;border-radius:10px;padding:18px 24px;text-align:center;flex:1'>
+              <div style='font-size:13px;color:#aaa;margin-bottom:6px'>{r.company} — {"United Chemicals" if r.company=="UC" else "United Paints"}</div>
+              <div style='font-size:28px;font-weight:500;color:#4ade80'>{r.count}</div>
+              <div style='font-size:13px;color:#aaa;margin-top:4px'>invoices</div>
+              <div style='font-size:18px;font-weight:500;color:#fbbf24;margin-top:8px'>₹{rev_cr:,.2f} Cr</div>
+            </div>"""
+
+        html = f"""<!DOCTYPE html><html><head><title>ERP Verification</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style='font-family:-apple-system,sans-serif;background:#0A1628;color:#fff;margin:0;padding:20px'>
+<div style='max-width:800px;margin:0 auto'>
+  <div style='text-align:center;margin-bottom:28px'>
+    <div style='font-size:36px'>🏭</div>
+    <h1 style='color:#fff;margin:8px 0 4px'>United Paints ERP</h1>
+    <h2 style='color:#4A9EE0;font-weight:400;font-size:18px;margin:0'>Live Database Verification</h2>
+  </div>
+
+  <div style='background:#1a2744;border-radius:12px;padding:20px 24px;text-align:center;margin-bottom:20px'>
+    <div style='font-size:13px;color:#aaa;margin-bottom:6px'>TOTAL INVOICES IN DATABASE</div>
+    <div style='font-size:52px;font-weight:500;color:#4ade80'>{total:,}</div>
+    <div style='font-size:13px;color:#aaa;margin-top:4px'>✅ All data is safe in PostgreSQL</div>
+  </div>
+
+  <div style='display:flex;gap:14px;margin-bottom:20px'>{company_cards}</div>
+
+  <div style='background:#0d1829;border-radius:12px;overflow:hidden;margin-bottom:20px'>
+    <div style='padding:14px 16px;background:#1a2744;font-size:14px;font-weight:500'>
+      📅 Month-wise Breakdown
+    </div>
+    <table style='width:100%;border-collapse:collapse;font-size:13px'>
+      <thead>
+        <tr style='background:#111d33'>
+          <th style='padding:10px 12px;text-align:left;color:#aaa'>Month</th>
+          <th style='padding:10px 12px;text-align:left;color:#aaa'>Company</th>
+          <th style='padding:10px 12px;text-align:center;color:#aaa'>Invoices</th>
+          <th style='padding:10px 12px;text-align:right;color:#aaa'>Revenue</th>
+        </tr>
+      </thead>
+      <tbody>{month_rows}</tbody>
+    </table>
+  </div>
+
+  <div style='background:#0d1829;border-radius:12px;overflow:hidden;margin-bottom:20px'>
+    <div style='padding:14px 16px;background:#1a2744;font-size:14px;font-weight:500'>
+      👥 Rep-wise Summary
+    </div>
+    <table style='width:100%;border-collapse:collapse;font-size:13px'>
+      <thead>
+        <tr style='background:#111d33'>
+          <th style='padding:10px 12px;text-align:left;color:#aaa'>Rep Name</th>
+          <th style='padding:10px 12px;text-align:center;color:#aaa'>Invoices</th>
+          <th style='padding:10px 12px;text-align:right;color:#aaa'>Revenue</th>
+        </tr>
+      </thead>
+      <tbody>{rep_rows}</tbody>
+    </table>
+  </div>
+
+  <div style='text-align:center;padding:16px;font-size:13px;color:#aaa'>
+    <a href='/dashboard' style='color:#4A9EE0;text-decoration:none;margin-right:20px'>→ Open Dashboard</a>
+    <a href='/upload-page' style='color:#4A9EE0;text-decoration:none'>→ Upload More Invoices</a>
+  </div>
+</div>
+</body></html>"""
+        return HTMLResponse(html)
+
+    except Exception as e:
+        return HTMLResponse(_page("Error", f"<p style='color:#f66'>{e}</p>"), 500)
+
+
+
 @app.exception_handler(404)
 async def not_found(request: Request, exc):
     return FileResponse("static/login.html")
